@@ -8,6 +8,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ranson21/ranor-auth/internal/auth"
 	"github.com/ranson21/ranor-auth/internal/config"
 	"github.com/ranson21/ranor-auth/internal/server"
 	dbConfig "github.com/ranson21/ranor-common/pkg/database/config"
@@ -19,6 +20,12 @@ import (
 func main() {
 	// Create a new service config
 	cfg := config.NewConfig()
+
+	// Create the firebase app
+	app, err := auth.New(os.Getenv("GCP_PROJECT"), os.Getenv("FIREBASE_SECRET_ID"))
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	// Create the db connection
 	db, err := connection.NewDB(dbConfig.NewDatabaseConfig(dbConfig.Environment(cfg.Env), "auth"))
@@ -40,7 +47,7 @@ func main() {
 	defer log.Sync()
 
 	// Create a new server to handle HTTP and gRPC traffic
-	srv := server.New(cfg, log, db)
+	srv := server.New(cfg, log, db, app)
 
 	// Create the service protocols
 	srv.SetupHTTP()

@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 
+	firebase "firebase.google.com/go/v4"
 	"github.com/gin-gonic/gin"
 	"github.com/ranson21/ranor-auth/internal/config"
 	serverGRPC "github.com/ranson21/ranor-auth/internal/grpc"
@@ -27,10 +28,12 @@ type Server struct {
 	grpcServer *grpc.Server
 	logger     logger.Logger
 	db         connection.Database
+	fb         *firebase.App
 }
 
-func New(cfg *config.Config, logger logger.Logger, db connection.Database) *Server {
+func New(cfg *config.Config, logger logger.Logger, db connection.Database, fb *firebase.App) *Server {
 	return &Server{
+		fb:     fb,
 		db:     db,
 		config: cfg,
 		logger: logger,
@@ -41,7 +44,7 @@ func (s *Server) SetupHTTP() {
 	s.ginEngine = gin.New()
 	s.ginEngine.Use(middleware.DefaultMiddlewares(s.logger)...)
 
-	authService := service.NewAuthService(s.db)
+	authService := service.NewAuthService(s.db, s.fb)
 	authHandler := serverHTTP.NewAuthHandler(authService)
 	authHandler.RegisterRoutes(s.ginEngine)
 
@@ -54,7 +57,7 @@ func (s *Server) SetupHTTP() {
 func (s *Server) SetupGRPC() {
 	server := grpc.NewServer()
 
-	authService := service.NewAuthService(s.db)
+	authService := service.NewAuthService(s.db, s.fb)
 	authServer := serverGRPC.NewAuthServer(authService)
 	pb.RegisterAuthServiceServer(server, authServer)
 

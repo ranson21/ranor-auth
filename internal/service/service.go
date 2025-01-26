@@ -3,17 +3,20 @@ package service
 import (
 	"context"
 
+	firebase "firebase.google.com/go/v4"
 	"github.com/ranson21/ranor-common/pkg/database/connection"
 )
 
 type AuthService struct {
 	db connection.Database
+	fb *firebase.App
 	// Add other dependencies like Firebase client
 }
 
-func NewAuthService(db connection.Database) *AuthService {
+func NewAuthService(db connection.Database, fb *firebase.App) *AuthService {
 	return &AuthService{
 		db: db,
+		fb: fb,
 	}
 }
 
