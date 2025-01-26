@@ -20,11 +20,16 @@ install:
 	@command go install github.com/swaggo/swag/cmd/swag@latest
 
 proto:
-	@command protoc --go_out=. --go_opt=paths=source_relative --go-grpc_out=. --go-grpc_opt=paths=source_relative pkg/grpc/service/service.proto
+	@command protoc --go_out=. --go_opt=paths=source_relative --go-grpc_out=. --go-grpc_opt=paths=source_relative proto/auth.proto
 
 ############
 # Begin DB #
 ############
+DB_BASE=postgres://postgres@localhost:5432
+PSQL=psql $(DB_BASE)
+
+drop-db:
+	$(PSQL) -c "DROP DATABASE IF EXISTS ranor"
 
 # Bring up the database
 db: db_container create_db migrate_up
@@ -34,8 +39,9 @@ db_console:
 
 # Create/Destroy DB
 create_db:
-	@command psql ${DB_BASE} -c 'CREATE DATABASE ${DB_NAME}'
-	@command psql ${DB_BASE} -c 'CREATE EXTENSION pgcrypto;'
+	$(PSQL) -c "CREATE DATABASE ranor"
+	$(PSQL) -c 'CREATE EXTENSION pgcrypto;'
+	$(PSQL)/ranor -c "CREATE SCHEMA IF NOT EXISTS auth"
 	@echo "Created database ${DB_NAME}"
 
 db_container:
@@ -58,28 +64,30 @@ db_container_down:
 	@command docker container rm -f postgres
 	@echo "Database Container removed Successfully"
 
-# # DB Migration Commands
-# migrate_new:
-# 	@command migrate create -ext sql -dir config/db/migrations/ -seq $(name)
+reset_db: db_container_down db
 
-# migrate_up:
-# 	@command migrate -path config/db/migrations/ -database ${DB_URL} -verbose up
+# DB Migration Commands
+migrate_new:
+	@command migrate create -ext sql -dir config/db/migrations/ -seq $(name)
 
-# migrate_down:
-# 	@command migrate -path config/db/migrations/ -database ${DB_URL} -verbose down
+migrate_up:
+	@command migrate -path config/db/migrations/ -database ${DB_URL} -verbose up
 
-# migrate_fix:
-# 	@command migrate -path config/db/migrations/$(name) -database ${DB} -force $(version)
+migrate_down:
+	@command migrate -path config/db/migrations/ -database ${DB_URL} -verbose down
 
-# # DB Seeding commands
-# seed_new:
-# 	@command migrate create -ext sql -dir config/db/seeds/ -seq $(name)
+migrate_fix:
+	@command migrate -path config/db/migrations/$(name) -database ${DB} -force $(version)
 
-# seed_up:
-# 	@command migrate -path config/db/seeds/ -database ${DB} -verbose up
+# DB Seeding commands
+seed_new:
+	@command migrate create -ext sql -dir config/db/seeds/ -seq $(name)
 
-# seed_down:
-# 	@command migrate -path config/db/seeds/ -database ${DB} -verbose down
+seed_up:
+	@command migrate -path config/db/seeds/ -database ${DB} -verbose up
 
-# seed_fix:
-# 	@command migrate -path config/db/seeds/$(name) -database ${DB} -force $(version)
+seed_down:
+	@command migrate -path config/db/seeds/ -database ${DB} -verbose down
+
+seed_fix:
+	@command migrate -path config/db/seeds/$(name) -database ${DB} -force $(version)
