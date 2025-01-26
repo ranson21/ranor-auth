@@ -17,7 +17,8 @@ import (
 )
 
 func main() {
-	db, err := connection.NewDB(dbConfig.NewDatabaseConfig(dbConfig.Environment(os.Getenv("ENV")), "auth"))
+	cfg := config.NewConfig()
+	db, err := connection.NewDB(dbConfig.NewDatabaseConfig(dbConfig.Environment(cfg.Env), "auth"))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -28,13 +29,12 @@ func main() {
 		log.Printf("Database connection error: %v", err)
 	}
 
-	log, err := logger.SetupLogger(logger.Environment(os.Getenv("ENV")))
+	log, err := logger.SetupLogger(logger.Environment(cfg.Env))
 	if err != nil {
 		panic(err)
 	}
 	defer log.Sync()
 
-	cfg := config.NewConfig()
 	srv := server.New(cfg, log, db)
 
 	srv.SetupHTTP()
