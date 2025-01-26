@@ -5,8 +5,8 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
-	"github.com/ranson21/ranor-auth/pkg/auth/claims"
-	"github.com/ranson21/ranor-auth/pkg/auth/token"
+	"github.com/ranson21/ranor-auth/internal/auth/claims"
+	"github.com/ranson21/ranor-auth/internal/auth/token"
 	"github.com/ranson21/ranor-common/pkg/logger"
 	"go.uber.org/zap"
 )
@@ -18,9 +18,9 @@ const (
 )
 
 type Middleware interface {
-	Authenticate(next http.Handler) http.Handler
-	RequirePermissions(permissions ...claims.Permission) func(http.Handler) http.Handler
-	RequireAnyPermission(permissions ...claims.Permission) func(http.Handler) http.Handler
+	Authenticate() gin.HandlerFunc
+	RequirePermissions(permissions ...claims.Permission) gin.HandlerFunc
+	RequireAnyPermission(permissions ...claims.Permission) gin.HandlerFunc
 }
 
 type AuthMiddleware struct {
@@ -77,7 +77,7 @@ func (m *AuthMiddleware) Authenticate() gin.HandlerFunc {
 // RequirePermissions Middleware
 func (m *AuthMiddleware) RequirePermissions(required ...claims.Permission) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		claims, exists := c.Get("claims")
+		authClaims, exists := c.Get("claims")
 		if !exists {
 			m.logger.Error("No claims found in context")
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
@@ -85,7 +85,7 @@ func (m *AuthMiddleware) RequirePermissions(required ...claims.Permission) gin.H
 			return
 		}
 
-		userClaims, ok := claims.(*claims.Claims)
+		userClaims, ok := authClaims.(*claims.Claims)
 		if !ok || !userClaims.HasAllPermissions(required...) {
 			m.logger.Warn("Insufficient permissions",
 				zap.String("user_id", userClaims.UserID),
@@ -104,7 +104,7 @@ func (m *AuthMiddleware) RequirePermissions(required ...claims.Permission) gin.H
 // RequireAnyPermission Middleware
 func (m *AuthMiddleware) RequireAnyPermission(permissions ...claims.Permission) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		claims, exists := c.Get("claims")
+		authClaims, exists := c.Get("claims")
 		if !exists {
 			m.logger.Error("No claims found in context")
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
@@ -112,7 +112,7 @@ func (m *AuthMiddleware) RequireAnyPermission(permissions ...claims.Permission) 
 			return
 		}
 
-		userClaims, ok := claims.(*claims.Claims)
+		userClaims, ok := authClaims.(*claims.Claims)
 		if !ok || !userClaims.HasAnyPermission(permissions...) {
 			m.logger.Warn("Insufficient permissions",
 				zap.String("user_id", userClaims.UserID),

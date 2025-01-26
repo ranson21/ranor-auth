@@ -4,11 +4,14 @@ package token
 import (
 	"context"
 	"fmt"
+	"os"
 
+	secretmanager "cloud.google.com/go/secretmanager/apiv1"
 	firebase "firebase.google.com/go/v4"
 	"firebase.google.com/go/v4/auth"
 	"github.com/ranson21/ranor-auth/internal/auth/claims"
 	"google.golang.org/api/option"
+	secretmanagerpb "google.golang.org/genproto/googleapis/cloud/secretmanager/v1"
 )
 
 type TokenValidator interface {
@@ -20,9 +23,8 @@ type firebaseValidator struct {
 	client *auth.Client
 }
 
-func NewTokenValidator(ctx context.Context, credentialsFile string) (TokenValidator, error) {
-	opt := option.WithCredentialsFile(credentialsFile)
-	app, err := firebase.NewApp(ctx, nil, opt)
+func NewTokenValidator(ctx context.Context) (TokenValidator, error) {
+	app, err := initFirebase(os.Getenv("GCP_PROJECT"), os.Getenv("FIREBASE_SECRET_ID"))
 	if err != nil {
 		return nil, fmt.Errorf("error initializing firebase app: %w", err)
 	}
@@ -79,4 +81,35 @@ func parseRoles(roles interface{}) []string {
 		}
 	}
 	return result
+}
+
+func initFirebase(projectID, secretID string) (*firebase.App, error) {
+	ctx := context.Background()
+
+	// Create Secret Manager client
+	smClient, err := secretmanager.NewClient(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create secretmanager client: %v", err)
+	}
+	defer smClient.Close()
+
+	// Get credentials from Secret Manager
+	name := fmt.Sprintf("projects/%s/secrets/%s/versions/latest", projectID, secretID)
+	req := &secretmanagerpb.AccessSecretVersionRequest{
+		Name: name,
+	}
+
+	result, err := smClient.AccessSecretVersion(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to access secret: %v", err)
+	}
+
+	// Initialize Firebase with credentials
+	opt := option.WithCredentialsJSON(result.Payload.Data)
+	app, err := firebase.NewApp(ctx, nil, opt)
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize firebase: %v", err)
+	}
+
+	return app, nil
 }
