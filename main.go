@@ -17,7 +17,10 @@ import (
 )
 
 func main() {
+	// Create a new service config
 	cfg := config.NewConfig()
+
+	// Create the db connection
 	db, err := connection.NewDB(dbConfig.NewDatabaseConfig(dbConfig.Environment(cfg.Env), "auth"))
 	if err != nil {
 		log.Fatal(err)
@@ -29,17 +32,21 @@ func main() {
 		log.Printf("Database connection error: %v", err)
 	}
 
+	// Setup the application logger
 	log, err := logger.SetupLogger(logger.Environment(cfg.Env))
 	if err != nil {
 		panic(err)
 	}
 	defer log.Sync()
 
+	// Create a new server to handle HTTP and gRPC traffic
 	srv := server.New(cfg, log, db)
 
+	// Create the service protocols
 	srv.SetupHTTP()
 	srv.SetupGRPC()
 
+	// Start the service
 	if err := srv.Start(); err != nil {
 		log.Error("Failed to start servers", zap.Error(err))
 		os.Exit(1)
