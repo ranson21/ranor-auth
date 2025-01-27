@@ -611,6 +611,35 @@ func (s *AuthService) ClearAuthCookies(w http.ResponseWriter) {
 	})
 }
 
+// RegisterApplication adds a new application to the SSO system
+func (s *AuthService) RegisterApplication(ctx context.Context, app Application) error {
+	// Validate the application
+	if app.ID == "" || len(app.RedirectURIs) == 0 {
+		return fmt.Errorf("invalid application configuration")
+	}
+
+	// Store in database
+	query := `
+			INSERT INTO sso_applications (
+					id, name, redirect_uris, allowed_users, created_at
+			) VALUES ($1, $2, $3, $4, $5)
+	`
+	_, err := s.db.ExecContext(ctx, query,
+		app.ID,
+		app.Name,
+		pq.Array(app.RedirectURIs),
+		pq.Array(app.AllowedUsers),
+		time.Now(),
+	)
+	if err != nil {
+		return fmt.Errorf("error registering application: %v", err)
+	}
+
+	// Update local cache
+	s.applications[app.ID] = app
+	return nil
+}
+
 /**
  * Begin HMAC Definition
  */

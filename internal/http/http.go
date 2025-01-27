@@ -27,6 +27,7 @@ func (h *AuthHandler) RegisterRoutes(r *gin.Engine) {
 		auth.POST("/validate", h.ValidateToken)
 		auth.GET("/session", h.GetSession)
 		auth.POST("/logout", h.Logout)
+		auth.POST("/applications", h.RegisterApplication)
 	}
 }
 
@@ -42,6 +43,21 @@ func (h *AuthHandler) InitiateOAuth(c *gin.Context) {
 	}
 
 	c.Redirect(http.StatusTemporaryRedirect, authURL)
+}
+
+func (h *AuthHandler) RegisterApplication(c *gin.Context) {
+	var app service.Application
+	if err := c.ShouldBindJSON(&app); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if err := h.authService.RegisterApplication(c.Request.Context(), app); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to register application: %v", err)})
+		return
+	}
+
+	c.Status(http.StatusCreated)
 }
 
 func (h *AuthHandler) OAuthCallback(c *gin.Context) {
