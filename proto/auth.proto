@@ -1,4 +1,3 @@
-// proto/auth.proto
 syntax = "proto3";
 
 package auth;
@@ -6,23 +5,41 @@ package auth;
 option go_package = "github.com/ranson21/ranor-auth/proto";
 
 service AuthService {
-  rpc ValidateToken(ValidateTokenRequest) returns (ValidateTokenResponse);
-  rpc CreateUser(CreateUserRequest) returns (CreateUserResponse);
+  rpc ValidateToken(ValidateTokenRequest) returns (ValidateTokenResponse) {}
+  rpc GetSession(GetSessionRequest) returns (GetSessionResponse) {}
 }
 
 message ValidateTokenRequest {
   string token = 1;
 }
 
+message TokenClaims {
+  string user_id = 1;
+  string email = 2;
+  string name = 3;
+  string provider = 4;
+  string session_id = 5;
+}
+
 message ValidateTokenResponse {
   bool valid = 1;
+  TokenClaims claims = 2;
 }
 
-message CreateUserRequest {
-  string email = 1;
-  string password = 2;
+message GetSessionRequest {
+  string session_id = 1;
 }
 
-message CreateUserResponse {
-  string user_id = 1;
+message Session {
+  string id = 1;
+  string user_id = 2;
+  string email = 3;
+  string name = 4;
+  string provider = 5;
+  int64 created_at = 6;
+  int64 expires_at = 7;
+}
+
+message GetSessionResponse {
+  Session session = 1;
 }

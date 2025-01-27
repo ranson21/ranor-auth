@@ -77,6 +77,7 @@ type UserInfo struct {
 }
 
 type AuthResult struct {
+	UserID                 string
 	Token                  string
 	IsNewUser              bool
 	RequiresAdditionalInfo bool
@@ -303,6 +304,7 @@ func (s *AuthService) HandleOAuthCallback(ctx context.Context, provider Provider
 	}
 
 	return &AuthResult{
+		UserID:                 user.UID,
 		Token:                  jwtToken,
 		IsNewUser:              isNewUser,
 		RequiresAdditionalInfo: s.needsAdditionalInfo(ctx, user.UID),
@@ -568,6 +570,45 @@ func (s *AuthService) ValidateApplicationAccess(ctx context.Context, appID, user
 	}
 
 	return fmt.Errorf("user not authorized for this application")
+}
+
+func (s *AuthService) GetAuthorizationURL(provider Provider, state string) (string, error) {
+	config, ok := s.providers[provider]
+	if !ok {
+		return "", fmt.Errorf("unsupported provider: %s", provider)
+	}
+	return config.AuthCodeURL(state), nil
+}
+
+func (s *AuthService) GetSessionCookieName() string {
+	return s.config.SessionCookieName
+}
+
+func (s *AuthService) GetApplicationRedirectURI(appID string) string {
+	app, ok := s.applications[appID]
+	if !ok || len(app.RedirectURIs) == 0 {
+		return "/"
+	}
+	return app.RedirectURIs[0]
+}
+
+func (s *AuthService) InvalidateSession(ctx context.Context, sessionID string) error {
+	query := `UPDATE sso_sessions SET expires_at = NOW() WHERE id = $1`
+	_, err := s.db.ExecContext(ctx, query, sessionID)
+	return err
+}
+
+func (s *AuthService) ClearAuthCookies(w http.ResponseWriter) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     s.config.SessionCookieName,
+		Value:    "",
+		Domain:   s.config.CookieDomain,
+		Path:     "/",
+		MaxAge:   -1,
+		Secure:   true,
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+	})
 }
 
 /**
