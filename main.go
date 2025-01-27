@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"log"
 	"os"
 	"os/signal"
 	"syscall"
@@ -10,6 +9,7 @@ import (
 
 	"github.com/ranson21/ranor-auth/internal/auth"
 	"github.com/ranson21/ranor-auth/internal/config"
+	"github.com/ranson21/ranor-auth/internal/secrets"
 	"github.com/ranson21/ranor-auth/internal/server"
 	dbConfig "github.com/ranson21/ranor-common/pkg/database/config"
 	"github.com/ranson21/ranor-common/pkg/database/connection"
@@ -21,30 +21,35 @@ func main() {
 	// Create a new service config
 	cfg := config.NewConfig()
 
-	// Create the firebase app
-	app, err := auth.New(os.Getenv("GCP_PROJECT"), os.Getenv("FIREBASE_SECRET_ID"))
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	// Create the db connection
-	db, err := connection.NewDB(dbConfig.NewDatabaseConfig(dbConfig.Environment(cfg.Env), "auth"))
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer db.Close() // Don't forget to close when done
-
-	// Use the database
-	if err := db.Ping(context.Background()); err != nil {
-		log.Printf("Database connection error: %v", err)
-	}
-
 	// Setup the application logger
 	log, err := logger.SetupLogger(logger.Environment(cfg.Env))
 	if err != nil {
 		panic(err)
 	}
 	defer log.Sync()
+
+	ctx := context.Background()
+	if err := secrets.InitDefaultManager(ctx, 5*time.Minute); err != nil {
+		log.Fatal("Failed to initialize secrets manager", zap.Error(err))
+	}
+
+	// Create the firebase app
+	app, err := auth.New(os.Getenv("GCP_PROJECT"), os.Getenv("FIREBASE_SECRET_ID"))
+	if err != nil {
+		log.Fatal("Failed to initialize firebase app", zap.Error(err))
+	}
+
+	// Create the db connection
+	db, err := connection.NewDB(dbConfig.NewDatabaseConfig(dbConfig.Environment(cfg.Env), "auth"))
+	if err != nil {
+		log.Fatal("Failed to initialize database", zap.Error(err))
+	}
+	defer db.Close() // Don't forget to close when done
+
+	// Use the database
+	if err := db.Ping(context.Background()); err != nil {
+		log.Fatal("Failed to connect to database", zap.Error(err))
+	}
 
 	// Create a new server to handle HTTP and gRPC traffic
 	srv := server.New(cfg, log, db, app)

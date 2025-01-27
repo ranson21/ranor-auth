@@ -32,6 +32,7 @@ type Server struct {
 }
 
 func New(cfg *config.Config, logger logger.Logger, db connection.Database, fb *firebase.App) *Server {
+
 	return &Server{
 		fb:     fb,
 		db:     db,
