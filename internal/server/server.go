@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 
@@ -41,11 +42,15 @@ func New(cfg *config.Config, logger logger.Logger, db connection.Database, fb *f
 	}
 }
 
-func (s *Server) SetupHTTP() {
+func (s *Server) SetupHTTP(ctx context.Context) {
 	s.ginEngine = gin.New()
 	s.ginEngine.Use(middleware.DefaultMiddlewares(s.logger)...)
 
-	authService := service.NewAuthService(s.db, s.fb)
+	authService, err := service.NewAuthService(ctx, s.db, s.fb)
+	if err != nil {
+		log.Fatalf("error configuring auth service %v", err)
+	}
+
 	authHandler := serverHTTP.NewAuthHandler(authService)
 	authHandler.RegisterRoutes(s.ginEngine)
 
@@ -55,10 +60,14 @@ func (s *Server) SetupHTTP() {
 	}
 }
 
-func (s *Server) SetupGRPC() {
+func (s *Server) SetupGRPC(ctx context.Context) {
 	server := grpc.NewServer()
 
-	authService := service.NewAuthService(s.db, s.fb)
+	authService, err := service.NewAuthService(ctx, s.db, s.fb)
+	if err != nil {
+		log.Fatalf("error configuring auth service %v", err)
+	}
+
 	authServer := serverGRPC.NewAuthServer(authService)
 	pb.RegisterAuthServiceServer(server, authServer)
 

@@ -55,8 +55,8 @@ func main() {
 	srv := server.New(cfg, log, db, app)
 
 	// Create the service protocols
-	srv.SetupHTTP()
-	srv.SetupGRPC()
+	srv.SetupHTTP(ctx)
+	srv.SetupGRPC(ctx)
 
 	// Start the service
 	if err := srv.Start(); err != nil {

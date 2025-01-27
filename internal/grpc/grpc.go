@@ -21,11 +21,11 @@ func NewAuthServer(authService *service.AuthService) *AuthServer {
 }
 
 func (s *AuthServer) ValidateToken(ctx context.Context, req *pb.ValidateTokenRequest) (*pb.ValidateTokenResponse, error) {
-	valid, err := s.authService.ValidateToken(ctx, req.Token)
+	_, err := s.authService.ValidateAccessToken(ctx, req.Token)
 	if err != nil {
 		return nil, status.Error(codes.Internal, "internal error")
 	}
 	return &pb.ValidateTokenResponse{
-		Valid: valid,
+		// Valid: valid,
 	}, nil
 }
