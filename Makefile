@@ -27,6 +27,24 @@ proto:
 ############
 DB_BASE=postgres://postgres@localhost:5432
 PSQL=psql $(DB_BASE)
+COMPOSE_FILE := config/docker-compose.yml
+
+up:
+	@docker compose -f config/docker-compose.yml up -d
+	@echo "Waiting for postgres..."
+	@for i in {1..10}; do \
+		if docker exec postgres pg_isready -U postgres >/dev/null 2>&1; then \
+			echo "Database is ready!"; \
+			break; \
+		fi; \
+		echo "Waiting for database... ($$i)"; \
+		sleep 1; \
+	done
+	@make create_db
+	@make migrate_up
+
+down:
+	@docker compose -f $(COMPOSE_FILE) down
 
 drop-db:
 	$(PSQL) -c "DROP DATABASE IF EXISTS ranor"
@@ -64,7 +82,7 @@ db_container_down:
 	@command docker container rm -f postgres
 	@echo "Database Container removed Successfully"
 
-reset_db: db_container_down db
+reset: down up
 
 # DB Migration Commands
 migrate_new:
