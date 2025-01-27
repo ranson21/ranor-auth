@@ -109,7 +109,8 @@ func NewAuthService(ctx context.Context, db connection.Database, fb *firebase.Ap
 		auth: authClient,
 		hmac: hmacConfig,
 		config: Config{
-			SessionCookieName:   "session",
+			SessionCookieName:   "sid",
+			TokenCookieName:     "access_token",
 			SessionCookieExpire: 3600 * time.Second,
 			AccessTokenExpire:   3600 * time.Second,
 			CookieDomain:        os.Getenv("SSO_COOKIE_DOMAIN"),
@@ -129,6 +130,7 @@ func NewAuthService(ctx context.Context, db connection.Database, fb *firebase.Ap
 
 	return service, nil
 }
+
 func (s *AuthService) loadProviders(ctx context.Context) error {
 	// Set the search path to ensure we're in the correct schema
 	_, err := s.db.ExecContext(ctx, `SET search_path TO auth`)
