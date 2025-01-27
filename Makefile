@@ -42,6 +42,7 @@ up:
 	done
 	@make create_db
 	@make migrate_up
+	@make seed_up
 
 down:
 	@docker compose -f $(COMPOSE_FILE) down
@@ -102,10 +103,21 @@ seed_new:
 	@command migrate create -ext sql -dir config/db/seeds/ -seq $(name)
 
 seed_up:
-	@command migrate -path config/db/seeds/ -database ${DB} -verbose up
+	@command migrate -path config/db/seeds/ -database "${DB_URL}&x-migrations-table=schema_seeds" -verbose up
+	@make update_providers
 
 seed_down:
 	@command migrate -path config/db/seeds/ -database ${DB} -verbose down
 
 seed_fix:
 	@command migrate -path config/db/seeds/$(name) -database ${DB} -force $(version)
+
+update_providers:
+	@echo "Updating OAuth provider configurations..."
+	@echo "Checking current values..."
+	$(PSQL)/ranor -c "SET search_path TO auth; SELECT id, client_id, secret_id FROM oauth_providers;"
+	$(PSQL)/ranor -c "SET search_path TO auth; UPDATE oauth_providers SET client_id = '$$GOOGLE_CLIENT_ID', secret_id = '$$GOOGLE_SECRET_ID' WHERE id = 'google' RETURNING id, client_id, secret_id;"
+	$(PSQL)/ranor -c "SET search_path TO auth; UPDATE oauth_providers SET client_id = '$$GITHUB_CLIENT_ID', secret_id = '$$GITHUB_SECRET_ID' WHERE id = 'github' RETURNING id, client_id, secret_id;"
+	@echo "Verifying final values..."
+	$(PSQL)/ranor -c "SET search_path TO auth; SELECT id, client_id, secret_id FROM oauth_providers;"
+	@echo "Provider configurations update complete"

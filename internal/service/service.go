@@ -8,12 +8,14 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	firebase "firebase.google.com/go/v4"
 	"firebase.google.com/go/v4/auth"
 	"github.com/golang-jwt/jwt/v4"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/lib/pq"
 	"github.com/ranson21/ranor-auth/internal/secrets"
 	"github.com/ranson21/ranor-common/pkg/database/connection"
@@ -127,13 +129,18 @@ func NewAuthService(ctx context.Context, db connection.Database, fb *firebase.Ap
 
 	return service, nil
 }
-
 func (s *AuthService) loadProviders(ctx context.Context) error {
+	// Set the search path to ensure we're in the correct schema
+	_, err := s.db.ExecContext(ctx, `SET search_path TO auth`)
+	if err != nil {
+		return fmt.Errorf("error setting search path: %w", err)
+	}
+
 	query := `
 		SELECT 
 			id, name, client_id, secret_id, 
-			redirect_uri, scopes, enabled
-		FROM oauth_providers
+			scopes, enabled
+		FROM auth.oauth_providers
 		WHERE enabled = true
 	`
 	rows, err := s.db.QueryContext(ctx, query)
@@ -143,12 +150,25 @@ func (s *AuthService) loadProviders(ctx context.Context) error {
 	defer rows.Close()
 
 	for rows.Next() {
-		var providerID, name, clientID, clientSecret, redirectURI string
-		var scopes []string
+		var providerID, name, clientID, clientSecret string
 		var enabled bool
+		scopes := make([]string, 0)
 
-		err := rows.Scan(&providerID, &name, &clientID, &clientSecret, &redirectURI, pq.Array(&scopes), &enabled)
+		// Debug the raw scan first
+		var rawScopes interface{}
+		err := rows.Scan(&providerID, &name, &clientID, &clientSecret, &rawScopes, &enabled)
 		if err != nil {
+			log.Printf("Debug - Raw scan error: %v", err)
+			return fmt.Errorf("error scanning provider (raw): %w", err)
+		}
+
+		// Log the raw scopes value for debugging
+		log.Printf("Debug - Raw scopes value: %+v", rawScopes)
+
+		// Try scanning again with the proper array handler
+		err = rows.Scan(&providerID, &name, &clientID, &clientSecret, pq.Array(&scopes), &enabled)
+		if err != nil {
+			log.Printf("Debug - Array scan error: %v", err)
 			return fmt.Errorf("error scanning provider: %w", err)
 		}
 
@@ -175,21 +195,29 @@ func (s *AuthService) loadProviders(ctx context.Context) error {
 			continue
 		}
 
+		// Log the successful provider configuration
+		log.Printf("Configuring provider: %s with %d scopes", providerID, len(scopes))
+
 		s.providers[Provider(providerID)] = &oauth2.Config{
 			ClientID:     clientID,
 			ClientSecret: string(secret),
-			RedirectURL:  redirectURI,
 			Scopes:       scopes,
 			Endpoint:     endpoint,
 		}
 	}
 
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("error iterating providers: %w", err)
+	}
+
 	return nil
 }
 
+// LoadApplications updates to handle the new many-to-many relationship
 func (s *AuthService) LoadApplications(ctx context.Context) error {
+	// First, load basic application information
 	query := `
-		SELECT id, name, redirect_uris, scopes, allowed_users
+		SELECT id, name, scopes, allowed_users
 		FROM sso_applications
 		WHERE active = true
 	`
@@ -204,13 +232,48 @@ func (s *AuthService) LoadApplications(ctx context.Context) error {
 		if err := rows.Scan(
 			&app.ID,
 			&app.Name,
-			pq.Array(&app.RedirectURIs),
 			pq.Array(&app.Scopes),
 			pq.Array(&app.AllowedUsers),
 		); err != nil {
 			return fmt.Errorf("error scanning application: %w", err)
 		}
+
+		// Initialize empty RedirectURIs slice
+		app.RedirectURIs = make([]string, 0)
 		s.applications[app.ID] = app
+	}
+
+	// Then load application provider configurations
+	providerQuery := `
+		SELECT application_id, provider_id, redirect_uri
+		FROM application_providers
+		WHERE enabled = true
+	`
+	providerRows, err := s.db.QueryContext(ctx, providerQuery)
+	if err != nil {
+		return fmt.Errorf("error loading application providers: %w", err)
+	}
+	defer providerRows.Close()
+
+	for providerRows.Next() {
+		var appID, providerID, redirectURI string
+		if err := providerRows.Scan(&appID, &providerID, &redirectURI); err != nil {
+			return fmt.Errorf("error scanning application provider: %w", err)
+		}
+
+		// Update application's redirect URIs
+		if app, ok := s.applications[appID]; ok {
+			app.RedirectURIs = append(app.RedirectURIs, redirectURI)
+			s.applications[appID] = app
+
+			// Update provider config with the redirect URI for this application
+			if provider, ok := s.providers[Provider(providerID)]; ok {
+				// Create a new config with the specific redirect URI for this application
+				providerCopy := *provider
+				providerCopy.RedirectURL = redirectURI
+				s.providers[Provider(providerID)] = &providerCopy
+			}
+		}
 	}
 
 	return nil
@@ -611,28 +674,51 @@ func (s *AuthService) ClearAuthCookies(w http.ResponseWriter) {
 	})
 }
 
-// RegisterApplication adds a new application to the SSO system
+// RegisterApplication updates to handle the new many-to-many relationship
 func (s *AuthService) RegisterApplication(ctx context.Context, app Application) error {
-	// Validate the application
-	if app.ID == "" || len(app.RedirectURIs) == 0 {
-		return fmt.Errorf("invalid application configuration")
+	// Start a transaction
+	tx, err := s.db.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return fmt.Errorf("error starting transaction: %w", err)
 	}
+	defer tx.Rollback(ctx)
 
-	// Store in database
+	// Insert the application
 	query := `
-			INSERT INTO sso_applications (
-					id, name, redirect_uris, allowed_users, created_at
-			) VALUES ($1, $2, $3, $4, $5)
+		INSERT INTO sso_applications (
+			id, name, scopes, allowed_users, active, created_at
+		) VALUES ($1, $2, $3, $4, true, NOW())
 	`
-	_, err := s.db.ExecContext(ctx, query,
+	_, err = tx.Exec(ctx, query,
 		app.ID,
 		app.Name,
-		pq.Array(app.RedirectURIs),
+		pq.Array(app.Scopes),
 		pq.Array(app.AllowedUsers),
-		time.Now(),
 	)
 	if err != nil {
-		return fmt.Errorf("error registering application: %v", err)
+		return fmt.Errorf("error registering application: %w", err)
+	}
+
+	// Insert application provider configurations
+	for _, redirectURI := range app.RedirectURIs {
+		// Extract provider from redirect URI (assuming format like ".../callback/google")
+		parts := strings.Split(redirectURI, "/")
+		providerID := parts[len(parts)-1] // Get the last part
+
+		query := `
+			INSERT INTO application_providers (
+				application_id, provider_id, redirect_uri, enabled
+			) VALUES ($1, $2, $3, true)
+		`
+		_, err = tx.Exec(ctx, query, app.ID, providerID, redirectURI)
+		if err != nil {
+			return fmt.Errorf("error registering application provider: %w", err)
+		}
+	}
+
+	// Commit the transaction
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("error committing transaction: %w", err)
 	}
 
 	// Update local cache
