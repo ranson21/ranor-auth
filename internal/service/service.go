@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -86,6 +87,14 @@ type AuthResult struct {
 	SessionID              string
 }
 
+type signInResponse struct {
+	IDToken      string `json:"idToken"`
+	Email        string `json:"email"`
+	RefreshToken string `json:"refreshToken"`
+	ExpiresIn    string `json:"expiresIn"`
+	LocalID      string `json:"localId"`
+}
+
 // NewAuthService creates a new AuthService instance
 func NewAuthService(ctx context.Context, db connection.Database, fb *firebase.App) (*AuthService, error) {
 	authClient, err := fb.Auth(ctx)
@@ -156,19 +165,8 @@ func (s *AuthService) loadProviders(ctx context.Context) error {
 		var enabled bool
 		scopes := make([]string, 0)
 
-		// Debug the raw scan first
-		var rawScopes interface{}
-		err := rows.Scan(&providerID, &name, &clientID, &clientSecret, &rawScopes, &enabled)
-		if err != nil {
-			log.Printf("Debug - Raw scan error: %v", err)
-			return fmt.Errorf("error scanning provider (raw): %w", err)
-		}
-
-		// Log the raw scopes value for debugging
-		log.Printf("Debug - Raw scopes value: %+v", rawScopes)
-
 		// Try scanning again with the proper array handler
-		err = rows.Scan(&providerID, &name, &clientID, &clientSecret, pq.Array(&scopes), &enabled)
+		err = rows.Scan(&providerID, &name, &clientID, &clientSecret, &scopes, &enabled)
 		if err != nil {
 			log.Printf("Debug - Array scan error: %v", err)
 			return fmt.Errorf("error scanning provider: %w", err)
@@ -234,8 +232,8 @@ func (s *AuthService) LoadApplications(ctx context.Context) error {
 		if err := rows.Scan(
 			&app.ID,
 			&app.Name,
-			pq.Array(&app.Scopes),
-			pq.Array(&app.AllowedUsers),
+			&app.Scopes,
+			&app.AllowedUsers,
 		); err != nil {
 			return fmt.Errorf("error scanning application: %w", err)
 		}
@@ -372,6 +370,146 @@ func (s *AuthService) HandleOAuthCallback(ctx context.Context, provider Provider
 		UserID:                 user.UID,
 		Token:                  jwtToken,
 		IsNewUser:              isNewUser,
+		RequiresAdditionalInfo: s.needsAdditionalInfo(ctx, user.UID),
+		SessionID:              session.ID,
+	}, nil
+}
+
+// New types for email/password auth
+type EmailSignUpRequest struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
+	Name     string `json:"name"`
+}
+
+type EmailSignInRequest struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
+}
+
+// Handle email/password sign up
+func (s *AuthService) HandleEmailSignUp(ctx context.Context, req EmailSignUpRequest) (*AuthResult, error) {
+	params := (&auth.UserToCreate{}).
+		Email(req.Email).
+		Password(req.Password).
+		DisplayName(req.Name)
+
+	// Create user in Firebase
+	user, err := s.auth.CreateUser(ctx, params)
+	if err != nil {
+		return nil, fmt.Errorf("error creating user: %w", err)
+	}
+
+	// Create user in your DB
+	userInfo := &UserInfo{
+		Email:    req.Email,
+		Name:     req.Name,
+		Provider: "password", // New provider type for email/password
+	}
+	if err := s.createUserInDB(ctx, user.UID, userInfo); err != nil {
+		return nil, fmt.Errorf("error creating user in database: %w", err)
+	}
+
+	// Create session like in OAuth flow
+	session, err := s.CreateSession(ctx, user.UID, req.Email, req.Name, "password")
+	if err != nil {
+		return nil, fmt.Errorf("failed to create session: %w", err)
+	}
+
+	// Create JWT token like in OAuth flow
+	claims := jwt.MapClaims{
+		"sub":      user.UID,
+		"email":    req.Email,
+		"name":     req.Name,
+		"provider": "password",
+		"exp":      time.Now().Add(s.config.AccessTokenExpire).Unix(),
+		"iat":      time.Now().Unix(),
+		"session":  session.ID,
+	}
+
+	jwtToken, err := s.CreateAccessToken(claims)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create token: %w", err)
+	}
+
+	return &AuthResult{
+		UserID:                 user.UID,
+		Token:                  jwtToken,
+		IsNewUser:              true,
+		RequiresAdditionalInfo: s.needsAdditionalInfo(ctx, user.UID),
+		SessionID:              session.ID,
+	}, nil
+}
+
+func (s *AuthService) HandleEmailSignIn(ctx context.Context, req EmailSignInRequest) (*AuthResult, error) {
+	// Get Firebase API key from environment or config
+	apiKey := os.Getenv("FIREBASE_API_KEY")
+
+	// Prepare the sign-in request
+	payload := map[string]string{
+		"email":             req.Email,
+		"password":          req.Password,
+		"returnSecureToken": "true",
+	}
+
+	jsonPayload, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling payload: %w", err)
+	}
+
+	// Make request to Firebase Auth REST API
+	url := fmt.Sprintf("https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=%s", apiKey)
+	resp, err := http.Post(url, "application/json", bytes.NewBuffer(jsonPayload))
+	if err != nil {
+		return nil, fmt.Errorf("authentication request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		var errResp map[string]interface{}
+		if err := json.NewDecoder(resp.Body).Decode(&errResp); err != nil {
+			return nil, fmt.Errorf("authentication failed with status %d", resp.StatusCode)
+		}
+		return nil, fmt.Errorf("authentication failed: %v", errResp)
+	}
+
+	var signInResp signInResponse
+	if err := json.NewDecoder(resp.Body).Decode(&signInResp); err != nil {
+		return nil, fmt.Errorf("error decoding response: %w", err)
+	}
+
+	// Get user details from Firebase
+	user, err := s.auth.GetUser(ctx, signInResp.LocalID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get user: %w", err)
+	}
+
+	// Create session
+	session, err := s.CreateSession(ctx, user.UID, user.Email, user.DisplayName, "password")
+	if err != nil {
+		return nil, fmt.Errorf("failed to create session: %w", err)
+	}
+
+	// Create JWT token
+	claims := jwt.MapClaims{
+		"sub":      user.UID,
+		"email":    user.Email,
+		"name":     user.DisplayName,
+		"provider": "password",
+		"exp":      time.Now().Add(s.config.AccessTokenExpire).Unix(),
+		"iat":      time.Now().Unix(),
+		"session":  session.ID,
+	}
+
+	jwtToken, err := s.CreateAccessToken(claims)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create token: %w", err)
+	}
+
+	return &AuthResult{
+		UserID:                 user.UID,
+		Token:                  jwtToken,
+		IsNewUser:              false,
 		RequiresAdditionalInfo: s.needsAdditionalInfo(ctx, user.UID),
 		SessionID:              session.ID,
 	}, nil

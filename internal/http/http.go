@@ -28,6 +28,8 @@ func (h *AuthHandler) RegisterRoutes(r *gin.Engine) {
 		auth.GET("/session", h.GetSession)
 		auth.POST("/logout", h.Logout)
 		auth.POST("/applications", h.RegisterApplication)
+		auth.POST("/signup", h.EmailSignUp)
+		auth.POST("/signin", h.EmailSignIn)
 	}
 }
 
@@ -43,6 +45,94 @@ func (h *AuthHandler) InitiateOAuth(c *gin.Context) {
 	}
 
 	c.Redirect(http.StatusTemporaryRedirect, authURL)
+}
+
+// New handler methods for email/password auth
+func (h *AuthHandler) EmailSignUp(c *gin.Context) {
+	var req service.EmailSignUpRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	result, err := h.authService.HandleEmailSignUp(c.Request.Context(), req)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("signup failed: %v", err)})
+		return
+	}
+
+	session, err := h.authService.GetSession(c.Request.Context(), result.SessionID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get session"})
+		return
+	}
+
+	// Use the appID from query param or default
+	appID := c.Query("app_id")
+	if appID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "app_id is required"})
+		return
+	}
+
+	if err := h.authService.ValidateApplicationAccess(c.Request.Context(), appID, result.UserID); err != nil {
+		c.JSON(http.StatusForbidden, gin.H{"error": "application access denied"})
+		return
+	}
+
+	h.authService.SetAuthCookies(c.Writer, session, result.Token, appID)
+
+	redirectURI := h.authService.GetApplicationRedirectURI(appID)
+	if result.RequiresAdditionalInfo {
+		redirectURI = fmt.Sprintf("%s?complete_profile=true", redirectURI)
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"redirect_uri": redirectURI,
+		"token":        result.Token,
+		"user_id":      result.UserID,
+		"is_new_user":  result.IsNewUser,
+	})
+}
+
+func (h *AuthHandler) EmailSignIn(c *gin.Context) {
+	var req service.EmailSignInRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	result, err := h.authService.HandleEmailSignIn(c.Request.Context(), req)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": fmt.Sprintf("signin failed: %v", err)})
+		return
+	}
+
+	session, err := h.authService.GetSession(c.Request.Context(), result.SessionID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get session"})
+		return
+	}
+
+	appID := c.Query("app_id")
+	if appID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "app_id is required"})
+		return
+	}
+
+	if err := h.authService.ValidateApplicationAccess(c.Request.Context(), appID, result.UserID); err != nil {
+		c.JSON(http.StatusForbidden, gin.H{"error": "application access denied"})
+		return
+	}
+
+	h.authService.SetAuthCookies(c.Writer, session, result.Token, appID)
+
+	redirectURI := h.authService.GetApplicationRedirectURI(appID)
+
+	c.JSON(http.StatusOK, gin.H{
+		"redirect_uri": redirectURI,
+		"token":        result.Token,
+		"user_id":      result.UserID,
+	})
 }
 
 func (h *AuthHandler) RegisterApplication(c *gin.Context) {
